@@ -4,19 +4,26 @@ import fs from "fs";
 import {keyboardFunction} from './keyboard';
 
 async function run() {
-  const host: string = core.getInput('host') || 'localhost';
-  const username: string = core.getInput('username');
+  const host: string = core.getInput('host') || '';
+  const username: string = core.getInput('username') || '';
   const port: number = +core.getInput('port') || 22;
-  const privateKey: string = core.getInput('privateKey');
+  const privateKey: string = core.getInput('privateKey') || '';
   const password: string = core.getInput('password');
   const passphrase: string = core.getInput('passphrase');
   const tryKeyboard: boolean = !!core.getInput('tryKeyboard');
   const verbose: boolean = !!core.getInput('verbose') || true;
   const recursive: boolean = !!core.getInput('recursive') || true;
   const concurrency: number = +core.getInput('concurrency') || 1;
-  const local: string = core.getInput('local');
-  const remote: string = core.getInput('remote');
-
+  const local: string = core.getInput('local') || '' ;
+  const remote: string = core.getInput('remote') || '';
+  const pull: boolean = !!core.getInput('pull');
+  
+  const directory: boolean = !!core.getInput('directory');
+  if (pull) { 
+    console.log("Pulling ${remote} to ${local}");
+  } else { 
+    console.log("Pushing ${local} to ${remote}");
+  }
   try {
     const ssh = await connect(
       host,
@@ -27,7 +34,7 @@ async function run() {
       passphrase,
       tryKeyboard
     );
-    await scp(ssh, local, remote, concurrency, verbose, recursive);
+    await scp(ssh, local, remote, concurrency, verbose, recursive, pull, directory);
 
     ssh.dispose();
   } catch (err) {
@@ -45,6 +52,7 @@ async function connect(
   tryKeyboard: boolean
 ) {
   const ssh = new node_ssh();
+  
   console.log(`Establishing a SSH connection to ${host}.`);
 
   try {
@@ -73,15 +81,29 @@ async function scp(
   remote: string,
   concurrency: number,
   verbose = true,
-  recursive = true
+  recursive = true,
+  pull = false,
+  directory = false
 ) {
   console.log(`Starting scp Action: ${local} to ${remote}`);
-
+  if (pull) { 
+    if (!fs.existsSync(local)) { 
+      fs.mkdirSync(local);
+    }
+  }
   try {
-    if (isDirectory(local)) {
-      await putDirectory(ssh, local, remote, concurrency, verbose, recursive);
+    if (isDirectory(local) || directory) {
+      if (pull) { 
+        await pullDirectory(ssh, local, remote, concurrency, verbose, recursive);
+      } else { 
+         await putDirectory(ssh, local, remote, concurrency, verbose, recursive);
+      }
     } else {
-      await putFile(ssh, local, remote, verbose);
+      if (pull) { 
+        await pullFile(ssh, local, remote, verbose);
+      } else { 
+        await putFile(ssh, local, remote, verbose);
+      }
     }
     ssh.dispose();
     console.log('✅ scp Action finished.');
@@ -143,6 +165,67 @@ async function putFile(
     await ssh.putFile(local, remote);
     if (verbose) {
       console.log(`✔ Successfully copied file ${local} to remote ${remote}.`);
+    }
+  } catch (error) {
+    console.error(`⚠️ An error happened:(.`, error.message, error.stack);
+    ssh.dispose();
+  }
+}
+
+
+
+async function pullDirectory(
+  ssh: node_ssh,
+  local: string,
+  remote: string,
+  concurrency = 3,
+  verbose = false,
+  recursive = true
+) {
+  const failed: {local: string; remote: string}[] = [];
+  const successful = [];
+  const status = await ssh.getDirectory(local, remote, {
+    recursive: recursive,
+    concurrency: concurrency,
+    tick: function(localPath, remotePath, error) {
+      if (error) {
+        if (verbose) {
+          console.log(`❕copy failed for ${localPath}.`);
+        }
+        failed.push({local: localPath, remote: remotePath});
+      } else {
+        if (verbose) {
+          console.log(`✔ successfully copied ${remotePath} to ${localPath}.`);
+        }
+        successful.push({local: localPath, remote: remotePath});
+      }
+    }
+  });
+
+  console.log(
+    `The copy of directory ${local} was ${
+      status ? 'successful' : 'unsuccessful'
+    }.`
+  );
+  if (failed.length > 0) {
+    console.log('failed transfers', failed.join(', '));
+    await putMany(failed, async failed => {
+      console.log(`Retrying to copy ${failed.local} to ${failed.remote}.`);
+      await putFile(ssh, failed.local, failed.remote, true);
+    });
+  }
+}
+
+async function pullFile(
+  ssh: node_ssh,
+  local: string,
+  remote: string,
+  verbose = true
+) {
+  try {
+    await ssh.getFile(local, remote);
+    if (verbose) {
+      console.log(`✔ Successfully copied file remote ${remote} to local ${local}.`);
     }
   } catch (error) {
     console.error(`⚠️ An error happened:(.`, error.message, error.stack);

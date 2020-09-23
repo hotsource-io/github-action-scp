@@ -43,6 +43,13 @@ inputs:
   tryKeyboard:
     description: "Try keyboard-interactive user authentication if primary user authentication method fails."
     required: false
+  pull:
+    description: "Pull from remote vs pushing to remote"
+    required: false
+  directory:
+    description: "Is directory"
+    required: false
+    
 runs:
   using: "node12"
   main: "dist/index.js"
